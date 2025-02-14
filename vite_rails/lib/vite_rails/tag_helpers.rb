@@ -42,10 +42,18 @@ module ViteRails::TagHelpers
     skip_style_tags: false,
     crossorigin: "anonymous",
     media: "screen",
+    integrity: true,
     **options)
     entries = vite_manifest.resolve_entries(*names, type: asset_type)
-    tags = javascript_include_tag(*entries.fetch(:scripts), crossorigin: crossorigin, type: type, extname: false, **options)
-    tags << vite_preload_tag(*entries.fetch(:imports), crossorigin: crossorigin, **options) unless skip_preload_tags
+    tags = "".html_safe
+    entries.fetch(:main).each do |src, attrs|
+      tags << javascript_include_tag(src, crossorigin: crossorigin, type: type, extname: false, **attrs, **options)
+    end
+    unless skip_preload_tags
+      entries.fetch(:imports).each do |href, attrs|
+        tags << vite_preload_tag(href, crossorigin: crossorigin, **attrs, **options)
+      end
+    end
 
     options[:extname] = false if Rails::VERSION::MAJOR >= 7
 
@@ -60,13 +68,15 @@ module ViteRails::TagHelpers
   end
 
   # Public: Renders a <link> tag for the specified Vite entrypoints.
-  def vite_stylesheet_tag(*names, **options)
-    style_paths = names.map { |name| vite_asset_path(name, type: :stylesheet) }
-
+  #
+   def vite_stylesheet_tag(*names, integrity: true, **options)
     options[:extname] = false if Rails::VERSION::MAJOR >= 7
-
-    stylesheet_link_tag(*style_paths, **options)
-  end
+    "".html_safe.tap do |tags|
+      vite_manifest.resolve_entries(*names, type: :stylesheet).fetch(:main).each do |href, attrs|
+        tags << stylesheet_link_tag(href, **attrs, **options)
+      end
+    end
+   end
 
   # Public: Renders an <img> tag for the specified Vite asset.
   def vite_image_tag(name, **options)
@@ -100,17 +110,14 @@ private
   end
 
   # Internal: Renders a modulepreload link tag.
-  def vite_preload_tag(*sources, crossorigin:, **options)
+  def vite_preload_tag(source, crossorigin:, **options)
     url_options = options.extract!(:host, :protocol)
-    asset_paths = sources.map { |source| path_to_asset(source, **url_options) }
-    try(:request).try(
-      :send_early_hints,
-      "Link" => asset_paths.map { |href|
-        %(<#{href}>; rel=modulepreload; as=script; crossorigin=#{crossorigin})
-      }.join("\n"),
-    )
-    asset_paths.map { |href|
-      tag.link(rel: "modulepreload", href: href, as: "script", crossorigin: crossorigin, **options)
-    }.join("\n").html_safe
+    href = path_to_asset(source, **url_options)
+    try(:request).try(:send_early_hints, "Link" => %(<#{href}>; rel=modulepreload; as=script; crossorigin=#{crossorigin}).tap { |hint|
+      if integrity = options[:integrity]
+        hint << "; integrity: #{integrity}"
+      end
+    })
+    tag.link(rel: "modulepreload", href: href, as: "script", type: "module", crossorigin: crossorigin, **options)
   end
 end
